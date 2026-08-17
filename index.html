@@ -187,8 +187,10 @@ async function fetchPrice(ticker){
   return data; // { code, price, prevClose, name, industryName, marketCap }
 }
 
-async function fetchHistory(ticker){
-  const res = await fetch(KIS_SERVER + "/stock-history/" + ticker + "?period=D&days=400");
+async function fetchHistory(ticker, period, days){
+  const p = period || "D";
+  const d = days || 400;
+  const res = await fetch(KIS_SERVER + "/stock-history/" + ticker + "?period=" + p + "&days=" + d);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "히스토리 조회 실패");
   return data.candles || []; // [{date:"20260101", close:"71500"}, ...] 오래된 날짜순
@@ -266,8 +268,117 @@ function checkTargetsForTicker(ticker){
   if (changed){ saveWatch(state.watchlist); maybeSyncPush(); }
 }
 
-/* ================= 로컬 저장소 ================= */
-const LS_WATCH = "svs_watchlist_v1";
+/* ================= 일봉/주봉/월봉/년봉 비교 차트 =================
+   선택한 종목의 가격 흐름을 코스피(0001)·코스닥(1001)과 함께
+   기간 시작 시점 대비 등락률(%)로 정규화해서 같은 차트에 겹쳐 보여줍니다. */
+const CHART_PERIODS = [
+  { key: "D", label: "일봉", days: 30 },
+  { key: "W", label: "주봉", days: 150 },
+  { key: "M", label: "월봉", days: 750 },
+  { key: "Y", label: "년봉", days: 3700 },
+];
+
+async function fetchIndexHistory(code, period, days){
+  const res = await fetch(KIS_SERVER + "/index-history/" + code + "?period=" + period + "&days=" + days);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "지수 히스토리 조회 실패");
+  return data.candles || [];
+}
+
+function toPctSeries(candles){
+  if (!candles || candles.length === 0) return [];
+  const first = Number(candles[0].close);
+  if (!first) return [];
+  return candles.map(c => ((Number(c.close) - first) / first) * 100);
+}
+
+async function ensureChartData(ticker, period, days){
+  const cacheKey = ticker + "_" + period;
+  const cached = state.chartCache[cacheKey];
+  if (cached && (cached.loading || cached.fetchedAt)) return cached; // 한번 불러오면 재사용
+
+  state.chartCache[cacheKey] = { loading: true };
+  try{
+    const [stockCandles, kospiCandles, kosdaqCandles] = await Promise.all([
+      fetchHistory(ticker, period, days),
+      fetchIndexHistory("0001", period, days),
+      fetchIndexHistory("1001", period, days),
+    ]);
+    state.chartCache[cacheKey] = {
+      loading: false,
+      error: null,
+      stock: toPctSeries(stockCandles),
+      kospi: toPctSeries(kospiCandles),
+      kosdaq: toPctSeries(kosdaqCandles),
+      fetchedAt: Date.now(),
+    };
+  } catch(err){
+    state.chartCache[cacheKey] = { loading: false, error: err.message, fetchedAt: Date.now() };
+  }
+  if (state.tab === "add" && state.pickedStock && state.pickedStock.ticker === ticker) render();
+  return state.chartCache[cacheKey];
+}
+
+function buildMiniChartSVG(seriesList){
+  const W = 300, H = 84, PAD = 4;
+  let allVals = [];
+  seriesList.forEach(s => { if (s.points && s.points.length) allVals = allVals.concat(s.points); });
+  if (allVals.length < 2) return `<div class="status-banner">차트 데이터가 부족합니다.</div>`;
+  const min = Math.min(...allVals);
+  const max = Math.max(...allVals);
+  const range = (max - min) || 1;
+  function toPath(points){
+    if (!points || points.length < 2) return "";
+    const n = points.length;
+    return points.map((v,i)=>{
+      const x = PAD + (i/(n-1)) * (W - PAD*2);
+      const y = PAD + (1 - (v-min)/range) * (H - PAD*2);
+      return `${i===0?"M":"L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+  }
+  const zeroY = (PAD + (1 - (0-min)/range) * (H - PAD*2)).toFixed(1);
+  const lines = seriesList.map(s => s.points && s.points.length>1
+    ? `<path d="${toPath(s.points)}" fill="none" stroke="${s.color}" stroke-width="1.6" />`
+    : ""
+  ).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:70px;display:block;">
+    <line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}" stroke="#232b35" stroke-width="1" stroke-dasharray="3,3" />
+    ${lines}
+  </svg>`;
+}
+
+function chartLegendHTML(stockName){
+  return `<div style="display:flex;gap:12px;font-size:10.5px;color:var(--dim);margin-top:4px;flex-wrap:wrap;">
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#20e3b2;margin-right:4px;"></span>${esc(stockName)}</span>
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f5b942;margin-right:4px;"></span>코스피</span>
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#7fb0ff;margin-right:4px;"></span>코스닥</span>
+  </div>`;
+}
+
+function renderChartsSection(ticker, stockName){
+  let html = `<div style="margin-top:14px;">`;
+  CHART_PERIODS.forEach(p => {
+    ensureChartData(ticker, p.key, p.days); // 캐시 있으면 재사용, 없으면 백그라운드 조회 시작
+    const cache = state.chartCache[ticker + "_" + p.key];
+    html += `<div style="margin-top:12px;">
+      <div style="font-size:12px;color:var(--dim);margin-bottom:4px;font-weight:600;">${p.label}</div>`;
+    if (!cache || cache.loading){
+      html += `<div class="status-banner">차트 불러오는 중…</div>`;
+    } else if (cache.error){
+      html += `<div class="status-banner" style="color:var(--up);">차트 조회 실패: ${esc(cache.error)}</div>`;
+    } else {
+      html += buildMiniChartSVG([
+        { color: "#20e3b2", points: cache.stock },
+        { color: "#f5b942", points: cache.kospi },
+        { color: "#7fb0ff", points: cache.kosdaq },
+      ]);
+      html += chartLegendHTML(stockName);
+    }
+    html += `</div>`;
+  });
+  html += `</div>`;
+  return html;
+}
 const LS_VOICE = "svs_voice_v1";
 const LS_PUSH_ID = "svs_push_id_v1";
 
@@ -311,6 +422,7 @@ const state = {
   voices: [],
   voiceURI: localStorage.getItem(LS_VOICE) || null,
   priceCache: {},
+  chartCache: {},
   pickedStock: null,
   buyInput: "",
   sellInput: "",
@@ -374,7 +486,8 @@ function renderAdd(){
         ${trendCellHTML("주간", cache.trends.week)}
         ${trendCellHTML("월간", cache.trends.month)}
         ${trendCellHTML("년간", cache.trends.year)}
-      </div>`;
+      </div>
+      ${renderChartsSection(s.ticker, s.name)}`;
     }
     html += `
       <div class="target-grid">
