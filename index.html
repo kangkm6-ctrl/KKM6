@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>주가 음성알림</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" type="image/png" href="favicon-32.png" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<meta name="theme-color" content="#0a0e12" />
+<style>
+  :root{
+    --bg:#0a0e12; --panel:#11161c; --panel2:#161c24; --line:#232b35;
+    --text:#e7ecf1; --dim:#7c8a99;
+    --up:#ff4d4f; --down:#3b82f6;
+    --accent:#20e3b2; --accent-dim:#0d5c49; --warn:#f5b942;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:'IBM Plex Sans KR','Pretendard',-apple-system,sans-serif;
+    -webkit-tap-highlight-color:transparent;}
+  .mono{font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;}
+  .app{max-width:520px;margin:0 auto;min-height:100vh;background:var(--bg);display:flex;flex-direction:column;}
+  .topbar{position:sticky;top:0;z-index:20;background:linear-gradient(180deg,var(--bg) 80%,transparent);
+    padding:18px 16px 10px;border-bottom:1px solid var(--line);}
+  .topbar h1{font-size:30px;letter-spacing:.08em;margin:0 0 4px;color:var(--accent);text-transform:uppercase;font-weight:700;}
+  .topbar .sub{font-size:11px;color:var(--dim);letter-spacing:.03em;}
+  .tabs{display:flex;gap:2px;margin-top:12px;background:var(--panel);border-radius:10px;padding:3px;}
+  .tab{flex:1;text-align:center;padding:10px 2px;font-size:19px;border-radius:8px;color:var(--dim);
+    cursor:pointer;font-weight:600;letter-spacing:.02em;}
+  .tab.active{background:var(--accent-dim);color:var(--accent);}
+  .content{flex:1;padding:14px 16px 100px;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;}
+  .card h2{font-size:18px;color:var(--dim);letter-spacing:.08em;margin:0 0 10px;text-transform:uppercase;font-weight:700;}
+  .search-wrap{position:relative;}
+  input[type=text],input[type=number]{width:100%;background:var(--panel2);border:1px solid var(--line);
+    color:var(--text);border-radius:10px;padding:12px;font-size:22.5px;outline:none;}
+  input::placeholder{font-size:15px;}
+  input:focus{border-color:var(--accent);}
+  .dropdown{position:absolute;left:0;right:0;top:calc(100% + 6px);background:var(--panel2);
+    border:1px solid var(--line);border-radius:10px;max-height:260px;overflow-y:auto;z-index:30;
+    box-shadow:0 12px 28px rgba(0,0,0,.5);}
+  .drow{padding:10px 12px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;
+    border-bottom:1px solid var(--line);}
+  .drow:last-child{border-bottom:none;}
+  .drow.hi{background:var(--panel);}
+  .drow .nm{font-size:21px;} .drow .tk{font-size:16.5px;color:var(--dim);}
+  .selected-chip{display:flex;align-items:center;justify-content:space-between;background:var(--panel2);
+    border:1px solid var(--accent-dim);border-radius:10px;padding:10px 12px;margin-top:8px;}
+  .selected-chip .nm{font-weight:700;font-size:21.75px;}
+  .selected-chip .tk{font-size:16.5px;color:var(--dim);margin-left:6px;}
+  .selected-chip .x{color:var(--dim);cursor:pointer;font-size:24px;padding:2px 6px;}
+  .price-row{display:flex;align-items:baseline;gap:8px;margin:12px 0 6px;}
+  .price-row .cur{font-size:39px;font-weight:700;}
+  .price-row .chg{font-size:19.5px;font-weight:600;}
+  .up{color:var(--up);} .down{color:var(--down);}
+  .trend-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px;}
+  .trend-cell{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 4px;text-align:center;}
+  .trend-cell .lab{font-size:15px;color:var(--dim);margin-bottom:3px;letter-spacing:.04em;}
+  .trend-cell .val{font-size:18.75px;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:2px;line-height:1.15;}
+  .trend-cell .arrow-line{font-size:15px;}
+  .trend-cell .pct-line{font-size:18.75px;}
+  .target-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;}
+  .field label{font-size:16.5px;color:var(--dim);display:block;margin-bottom:5px;font-weight:600;}
+  .btn{background:var(--accent);color:#032b22;border:none;border-radius:10px;padding:12px;font-size:21.75px;
+    font-weight:700;width:100%;cursor:pointer;margin-top:14px;}
+  .btn:disabled{background:var(--line);color:var(--dim);}
+  .watch-item{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;
+    margin-bottom:10px;position:relative;overflow:hidden;}
+  .watch-item.fired{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;}
+  .wi-top{display:flex;justify-content:space-between;align-items:flex-start;}
+  .wi-name{font-size:23.25px;font-weight:700;} .wi-tk{font-size:15.75px;color:var(--dim);}
+  .wi-price{font-size:28.5px;font-weight:700;}
+  .wi-targets{display:flex;gap:16px;margin-top:10px;font-size:18px;}
+  .wi-targets .t{color:var(--dim);} .wi-targets b{color:var(--text);}
+  .wi-actions{display:flex;gap:8px;margin-top:10px;}
+  .pill{font-size:15.75px;padding:4px 10px;border-radius:20px;border:1px solid var(--line);color:var(--dim);cursor:pointer;}
+  .pill.danger{color:var(--up);border-color:#4a1f21;}
+  .pill.reset{color:var(--accent);border-color:var(--accent-dim);}
+  .fired-badge{position:absolute;top:0;right:0;background:var(--accent);color:#032b22;font-size:15px;
+    font-weight:800;padding:4px 10px;border-radius:0 0 0 10px;letter-spacing:.04em;}
+  .empty{text-align:center;color:var(--dim);font-size:13px;padding:50px 20px;line-height:1.7;}
+  .voice-item{display:flex;align-items:center;justify-content:space-between;background:var(--panel2);
+    border:1px solid var(--line);border-radius:10px;padding:11px 12px;margin-bottom:8px;cursor:pointer;}
+  .voice-item.sel{border-color:var(--accent);background:rgba(32,227,178,.06);}
+  .voice-item .vi-left{display:flex;align-items:center;gap:10px;}
+  .gtag{font-size:15px;padding:4px 9px;border-radius:6px;font-weight:700;flex-shrink:0;}
+  .gtag.male{background:#1a2a4a;color:#7fb0ff;}
+  .gtag.female{background:#4a1a3a;color:#ff8fd6;}
+  .gtag.unknown{background:#2a2a2a;color:var(--dim);}
+  .voice-item .vname{font-size:20.25px;} .voice-item .vlang{font-size:15.75px;color:var(--dim);margin-top:2px;}
+  .play-btn{background:var(--panel);border:1px solid var(--line);border-radius:50%;width:34px;height:34px;
+    display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:21px;cursor:pointer;flex-shrink:0;}
+  .radio-dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--line);flex-shrink:0;}
+  .radio-dot.on{border-color:var(--accent);background:radial-gradient(var(--accent) 40%,transparent 44%);}
+  .status-banner{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:8px;padding:10px 12px;font-size:12px;color:var(--dim);margin-bottom:12px;line-height:1.6;}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--accent);color:#032b22;
+    font-weight:700;font-size:20.25px;padding:12px 20px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.5);
+    z-index:100;max-width:90%;text-align:center;}
+  input[type=range]{-webkit-appearance:none;height:4px;background:var(--line);border-radius:2px;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--accent);}
+  ::-webkit-scrollbar{width:0;height:0;}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <h1>주가 음성알림</h1>
+    <div class="sub">목표가 도달 시 음성으로 바로 알려드립니다</div>
+    <div class="tabs">
+      <div class="tab active" data-tab="add">알림 등록</div>
+      <div class="tab" data-tab="watch">감시 목록</div>
+      <div class="tab" data-tab="voice">음성 설정</div>
+    </div>
+  </div>
+  <div class="content" id="content"></div>
+</div>
+<div id="toastWrap"></div>
+
+<script>
+/* ================= 초성 유틸 ================= */
+const CHO = ["ㄱ","ㄲ","ㄴ","ㄷ","ㄸ","ㄹ","ㅁ","ㅂ","ㅃ","ㅅ","ㅆ","ㅇ","ㅈ","ㅉ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ"];
+function getChosung(str){
+  let out = "";
+  for (const ch of str){
+    const code = ch.charCodeAt(0) - 0xAC00;
+    if (code >= 0 && code <= 11171) out += CHO[Math.floor(code / 588)];
+    else out += ch;
+  }
+  return out;
+}
+function isChosungOnly(str){ return [...str].every(c => CHO.includes(c) || c === " "); }
+function matchesQuery(name, ticker, query){
+  if (!query) return true;
+  const q = query.trim().toLowerCase();
+  if (ticker.toLowerCase().includes(q)) return true;
+  if (name.toLowerCase().includes(q)) return true;
+  if (isChosungOnly(query)) return getChosung(name).includes(query.trim());
+  return false;
+}
+
+/* ================= 종목 마스터 ================= */
+const STOCK_LIST = [
+  {ticker:"005930", name:"삼성전자"}, {ticker:"000660", name:"SK하이닉스"},
+  {ticker:"373220", name:"LG에너지솔루션"}, {ticker:"207940", name:"삼성바이오로직스"},
+  {ticker:"005380", name:"현대차"}, {ticker:"006400", name:"삼성SDI"},
+  {ticker:"051910", name:"LG화학"}, {ticker:"035420", name:"NAVER"},
+  {ticker:"035720", name:"카카오"}, {ticker:"068270", name:"셀트리온"},
+  {ticker:"105560", name:"KB금융"}, {ticker:"055550", name:"신한지주"},
+  {ticker:"012330", name:"현대모비스"}, {ticker:"028260", name:"삼성물산"},
+  {ticker:"066570", name:"LG전자"}, {ticker:"003670", name:"포스코퓨처엠"},
+  {ticker:"096770", name:"SK이노베이션"}, {ticker:"017670", name:"SK텔레콤"},
+  {ticker:"030200", name:"KT"}, {ticker:"086790", name:"하나금융지주"},
+  {ticker:"316140", name:"우리금융지주"}, {ticker:"010130", name:"고려아연"},
+  {ticker:"011200", name:"HMM"}, {ticker:"259960", name:"크래프톤"},
+  {ticker:"036570", name:"엔씨소프트"}, {ticker:"251270", name:"넷마블"},
+  {ticker:"058470", name:"리노공업"}, {ticker:"462870", name:"시프트업"},
+  {ticker:"086520", name:"에코프로"}, {ticker:"247540", name:"에코프로비엠"},
+  {ticker:"066970", name:"엘앤에프"}, {ticker:"137400", name:"피엔티"},
+  {ticker:"091990", name:"셀트리온헬스케어"}, {ticker:"196170", name:"알테오젠"},
+  {ticker:"302440", name:"SK바이오사이언스"}, {ticker:"018260", name:"삼성에스디에스"},
+  {ticker:"010950", name:"S-Oil"}, {ticker:"267250", name:"HD현대중공업"},
+  {ticker:"329180", name:"HD현대중공업지주"}, {ticker:"010140", name:"삼성중공업"},
+  {ticker:"042660", name:"한화오션"}, {ticker:"009540", name:"HD한국조선해양"},
+  {ticker:"000270", name:"기아"}, {ticker:"024110", name:"기업은행"},
+  {ticker:"323410", name:"카카오뱅크"}, {ticker:"377300", name:"카카오페이"},
+  {ticker:"352820", name:"하이브"}, {ticker:"041510", name:"에스엠"},
+  {ticker:"122870", name:"와이지엔터테인먼트"}, {ticker:"035900", name:"JYP Ent."},
+  {ticker:"090430", name:"아모레퍼시픽"}, {ticker:"161390", name:"한국타이어앤테크놀로지"},
+  {ticker:"011070", name:"LG이노텍"}, {ticker:"009150", name:"삼성전기"},
+  {ticker:"326030", name:"SK바이오팜"}, {ticker:"128940", name:"한미약품"},
+  {ticker:"293490", name:"카카오게임즈"}, {ticker:"112040", name:"위메이드"},
+  {ticker:"263750", name:"펄어비스"}, {ticker:"034020", name:"두산에너빌리티"},
+];
+
+/* ================= KIS 실시간 시세 연동 =================
+   서버(kkm-mwrc.onrender.com)의 /price/:code, /stock-history/:code 를
+   통해 실제 시세를 가져옵니다. 결과는 priceCache에 잠시 저장해두고
+   재사용합니다 (너무 자주 KIS API를 호출하지 않도록). */
+const PRICE_CACHE_TTL = 15000; // 15초 이내 재요청이면 캐시 재사용
+
+async function fetchPrice(ticker){
+  const res = await fetch(KIS_SERVER + "/price/" + ticker);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "시세 조회 실패");
+  return data; // { code, price, prevClose, name, industryName, marketCap }
+}
+
+async function fetchHistory(ticker, period, days){
+  const p = period || "D";
+  const d = days || 400;
+  const res = await fetch(KIS_SERVER + "/stock-history/" + ticker + "?period=" + p + "&days=" + d);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "히스토리 조회 실패");
+  return data.candles || []; // [{date:"20260101", close:"71500"}, ...] 오래된 날짜순
+}
+
+function computeTrends(candles, currentPrice, prevClose){
+  function closeApproxDaysAgo(daysAgo){
+    if (!candles || candles.length === 0) return null;
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() - daysAgo);
+    const targetStr = targetDate.toISOString().slice(0,10).replace(/-/g,"");
+    let best = null;
+    for (const c of candles){
+      if (c.date <= targetStr) best = c; else break;
+    }
+    if (!best) best = candles[0];
+    return Number(best.close);
+  }
+  function pct(daysAgo){
+    const base = closeApproxDaysAgo(daysAgo);
+    if (!base) return 0;
+    return Math.round(((currentPrice - base) / base) * 1000) / 10;
+  }
+  const dayPct = prevClose ? Math.round(((currentPrice - prevClose) / prevClose) * 1000) / 10 : pct(1);
+  return { day: dayPct, week: pct(7), month: pct(30), year: pct(365) };
+}
+
+async function ensurePriceData(ticker, forceRefresh){
+  const cached = state.priceCache[ticker];
+  const now = Date.now();
+  if (cached && cached.loading) return cached; // 이미 요청 중이면 중복 요청 방지
+  if (!forceRefresh && cached && !cached.error && (now - (cached.fetchedAt||0)) < PRICE_CACHE_TTL) return cached;
+
+  state.priceCache[ticker] = { ...(state.priceCache[ticker]||{}), loading: true };
+  try{
+    const priceData = await fetchPrice(ticker);
+    let candles = [];
+    try { candles = await fetchHistory(ticker); } catch(e){ /* 추세 계산 불가 시 일간만 표시 */ }
+    const trends = computeTrends(candles, priceData.price, priceData.prevClose);
+    state.priceCache[ticker] = {
+      price: priceData.price,
+      prevClose: priceData.prevClose,
+      name: priceData.name,
+      trends,
+      loading: false,
+      error: null,
+      fetchedAt: Date.now(),
+    };
+  } catch(err){
+    state.priceCache[ticker] = { loading: false, error: err.message, fetchedAt: Date.now() };
+  }
+  checkTargetsForTicker(ticker);
+  if (state.tab === "watch" || state.tab === "add") render();
+  return state.priceCache[ticker];
+}
+
+function checkTargetsForTicker(ticker){
+  const cache = state.priceCache[ticker];
+  if (!cache || cache.error || cache.price == null) return;
+  const p = cache.price;
+  let changed = false;
+  state.watchlist.forEach(item=>{
+    if (item.ticker !== ticker) return;
+    if (item.buyTarget && !item.buyFired && p <= item.buyTarget){
+      item.buyFired = true; changed = true;
+      const msg = `${item.name}, 매수 목표가 ${fmt(item.buyTarget)}원에 도달했습니다.`;
+      speak(msg, item.voiceURI); showToast(msg);
+    }
+    if (item.sellTarget && !item.sellFired && p >= item.sellTarget){
+      item.sellFired = true; changed = true;
+      const msg = `${item.name}, 매도 목표가 ${fmt(item.sellTarget)}원에 도달했습니다.`;
+      speak(msg, item.voiceURI); showToast(msg);
+    }
+  });
+  if (changed){ saveWatch(state.watchlist); maybeSyncPush(); }
+}
+
+/* ================= 일봉/주봉/월봉/년봉 비교 차트 =================
+   선택한 종목의 가격 흐름을 코스피(0001)·코스닥(1001)과 함께
+   기간 시작 시점 대비 등락률(%)로 정규화해서 같은 차트에 겹쳐 보여줍니다. */
+const CHART_PERIODS = [
+  { key: "D", label: "일봉", days: 30 },
+  { key: "W", label: "주봉", days: 150 },
+  { key: "M", label: "월봉", days: 750 },
+  { key: "Y", label: "년봉", days: 3700 },
+];
+
+async function fetchIndexHistory(code, period, days){
+  const res = await fetch(KIS_SERVER + "/index-history/" + code + "?period=" + period + "&days=" + days);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "지수 히스토리 조회 실패");
+  return data.candles || [];
+}
+
+function toPctSeries(candles){
+  if (!candles || candles.length === 0) return [];
+  const first = Number(candles[0].close);
+  if (!first) return [];
+  return candles.map(c => ((Number(c.close) - first) / first) * 100);
+}
+
+async function ensureChartData(ticker, period, days){
+  const cacheKey = ticker + "_" + period;
+  const cached = state.chartCache[cacheKey];
+  if (cached && (cached.loading || cached.fetchedAt)) return cached; // 한번 불러오면 재사용
+
+  state.chartCache[cacheKey] = { loading: true };
+  try{
+    const [stockCandles, kospiCandles, kosdaqCandles] = await Promise.all([
+      fetchHistory(ticker, period, days),
+      fetchIndexHistory("0001", period, days),
+      fetchIndexHistory("1001", period, days),
+    ]);
+    state.chartCache[cacheKey] = {
+      loading: false,
+      error: null,
+      stock: toPctSeries(stockCandles),
+      kospi: toPctSeries(kospiCandles),
+      kosdaq: toPctSeries(kosdaqCandles),
+      fetchedAt: Date.now(),
+    };
+  } catch(err){
+    state.chartCache[cacheKey] = { loading: false, error: err.message, fetchedAt: Date.now() };
+  }
+  if (state.tab === "add" && state.pickedStock && state.pickedStock.ticker === ticker) render();
+  return state.chartCache[cacheKey];
+}
+
+function buildMiniChartSVG(seriesList){
+  const W = 300, H = 84, PAD = 4;
+  let allVals = [];
+  seriesList.forEach(s => { if (s.points && s.points.length) allVals = allVals.concat(s.points); });
+  if (allVals.length < 2) return `<div class="status-banner">차트 데이터가 부족합니다.</div>`;
+  const min = Math.min(...allVals);
+  const max = Math.max(...allVals);
+  const range = (max - min) || 1;
+  function toPath(points){
+    if (!points || points.length < 2) return "";
+    const n = points.length;
+    return points.map((v,i)=>{
+      const x = PAD + (i/(n-1)) * (W - PAD*2);
+      const y = PAD + (1 - (v-min)/range) * (H - PAD*2);
+      return `${i===0?"M":"L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+  }
+  const zeroY = (PAD + (1 - (0-min)/range) * (H - PAD*2)).toFixed(1);
+  const lines = seriesList.map(s => s.points && s.points.length>1
+    ? `<path d="${toPath(s.points)}" fill="none" stroke="${s.color}" stroke-width="1.6" />`
+    : ""
+  ).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:70px;display:block;">
+    <line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}" stroke="#232b35" stroke-width="1" stroke-dasharray="3,3" />
+    ${lines}
+  </svg>`;
+}
+
+function chartLegendHTML(stockName){
+  return `<div style="display:flex;gap:12px;font-size:10.5px;color:var(--dim);margin-top:4px;flex-wrap:wrap;">
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#20e3b2;margin-right:4px;"></span>${esc(stockName)}</span>
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f5b942;margin-right:4px;"></span>코스피</span>
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#7fb0ff;margin-right:4px;"></span>코스닥</span>
+  </div>`;
+}
+
+function renderChartsSection(ticker, stockName){
+  let html = `<div style="margin-top:14px;">`;
+  CHART_PERIODS.forEach(p => {
+    ensureChartData(ticker, p.key, p.days); // 캐시 있으면 재사용, 없으면 백그라운드 조회 시작
+    const cache = state.chartCache[ticker + "_" + p.key];
+    html += `<div style="margin-top:12px;">
+      <div style="font-size:12px;color:var(--dim);margin-bottom:4px;font-weight:600;">${p.label}</div>`;
+    if (!cache || cache.loading){
+      html += `<div class="status-banner">차트 불러오는 중…</div>`;
+    } else if (cache.error){
+      html += `<div class="status-banner" style="color:var(--up);">차트 조회 실패: ${esc(cache.error)}</div>`;
+    } else {
+      html += buildMiniChartSVG([
+        { color: "#20e3b2", points: cache.stock },
+        { color: "#f5b942", points: cache.kospi },
+        { color: "#7fb0ff", points: cache.kosdaq },
+      ]);
+      html += chartLegendHTML(stockName);
+    }
+    html += `</div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+const LS_VOICE = "svs_voice_v1";
+const LS_PUSH_ID = "svs_push_id_v1";
+
+/* ================= KIS 프록시 서버 주소 =================
+   실시간 시세(/price, /stock-history)를 제공하는 서버 주소입니다.
+   백그라운드 푸시 서버(PUSH_SERVER)와 같은 서버를 쓰고 계시므로 동일하게 둡니다. */
+const KIS_SERVER = "https://kkm-mwrc.onrender.com";
+
+/* ================= 백그라운드 푸시 설정 =================
+   PUSH_SERVER: push-server-addon 코드를 배포한 서버 주소로 바꿔주세요.
+   (기존 KIS 프록시 서버에 라우터를 추가했다면 그 주소를 그대로 사용)
+   공개키는 사람이 옮겨 적지 않고, 서버의 /api/vapid-public-key 에서
+   자동으로 가져옵니다. */
+const PUSH_SERVER = "https://kkm-mwrc.onrender.com";
+
+function urlBase64ToUint8Array(base64String){
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+function loadWatch(){ try{ return JSON.parse(localStorage.getItem(LS_WATCH)) || []; }catch(e){ return []; } }
+function saveWatch(list){ try{ localStorage.setItem(LS_WATCH, JSON.stringify(list)); }catch(e){} }
+
+/* ================= 음성 성별 추정 ================= */
+const FEMALE_HINTS = ["yuna","female","여자","여성","kyuri","sora","jimin","susan","samantha","victoria","karen","moira","tessa","fiona","allison","ava","serena","zira"];
+const MALE_HINTS = ["injoon","male","남자","남성","minsu","daniel","fred","alex","tom","aaron","gordon"];
+function guessGender(voice){
+  const n = (voice.name||"").toLowerCase();
+  if (FEMALE_HINTS.some(h=>n.includes(h))) return "female";
+  if (MALE_HINTS.some(h=>n.includes(h))) return "male";
+  return "unknown";
+}
+
+/* ================= 상태 ================= */
+const state = {
+  tab: "add",
+  watchlist: loadWatch(),
+  voices: [],
+  voiceURI: localStorage.getItem(LS_VOICE) || null,
+  priceCache: {},
+  chartCache: {},
+  pickedStock: null,
+  buyInput: "",
+  sellInput: "",
+  searchQuery: "",
+  searchOpen: false,
+  speechRate: 1,
+  pushSubscribed: localStorage.getItem(LS_PUSH_ID) ? true : false,
+  pushId: localStorage.getItem(LS_PUSH_ID) || null,
+  pushBusy: false,
+};
+
+const contentEl = document.getElementById("content");
+const toastWrap = document.getElementById("toastWrap");
+
+function esc(s){
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function fmt(n){ return Number(n).toLocaleString("ko-KR"); }
+
+function trendCellHTML(label, value){
+  const isUp = value >= 0;
+  return `<div class="trend-cell">
+    <div class="lab">${label}</div>
+    <div class="val mono ${isUp?"up":"down"}">
+      <div class="arrow-line">${isUp?"▲":"▼"}</div>
+      <div class="pct-line">${Math.abs(value).toFixed(1)}%</div>
+    </div>
+  </div>`;
+}
+
+/* ================= 렌더: 알림 등록 탭 ================= */
+function renderAdd(){
+  let html = `<div class="card"><h2 style="font-size:18px;">종목 선택</h2>`;
+  if (!state.pickedStock){
+    html += `
+      <div class="search-wrap">
+        <input type="text" id="stockSearch" placeholder="종목명 또는 초성 입력 (예: 삼전, ㅅㅅㅈㅈ)" value="${esc(state.searchQuery)}" autocomplete="off" />
+        <div id="dropdownHost"></div>
+      </div>`;
+  } else {
+    const s = state.pickedStock;
+    ensurePriceData(s.ticker); // 캐시 있으면 재사용, 없으면 백그라운드에서 조회 시작
+    const cache = state.priceCache[s.ticker];
+    html += `
+      <div class="selected-chip">
+        <span><span class="nm">${esc(s.name)}</span><span class="tk mono"> ${esc(s.ticker)}</span></span>
+        <span class="x" id="clearStock">✕</span>
+      </div>`;
+    if (!cache || cache.loading){
+      html += `<div class="status-banner" style="margin-top:10px;">시세 조회 중…</div>`;
+    } else if (cache.error){
+      html += `<div class="status-banner" style="margin-top:10px;color:var(--up);">시세 조회 실패: ${esc(cache.error)}</div>`;
+    } else {
+      html += `
+      <div class="price-row">
+        <span class="cur mono">${fmt(cache.price)}<span style="font-size:19.5px;color:var(--dim);font-weight:400;"> 원</span></span>
+        <span class="chg mono ${cache.trends.day>=0?"up":"down"}">${cache.trends.day>=0?"▲":"▼"} ${Math.abs(cache.trends.day).toFixed(1)}%</span>
+      </div>
+      <div class="trend-grid">
+        ${trendCellHTML("일간", cache.trends.day)}
+        ${trendCellHTML("주간", cache.trends.week)}
+        ${trendCellHTML("월간", cache.trends.month)}
+        ${trendCellHTML("년간", cache.trends.year)}
+      </div>
+      ${renderChartsSection(s.ticker, s.name)}`;
+    }
+    html += `
+      <div class="target-grid">
+        <div class="field">
+          <label>매수 알림가 (원)</label>
+          <input type="number" inputmode="numeric" id="buyInput" placeholder="매수금액" value="${esc(state.buyInput)}" />
+        </div>
+        <div class="field">
+          <label>매도 알림가 (원)</label>
+          <input type="number" inputmode="numeric" id="sellInput" placeholder="매도금액" value="${esc(state.sellInput)}" />
+        </div>
+      </div>
+      <button class="btn" id="submitAlert" ${(!state.buyInput && !state.sellInput)?"disabled":""}>알림 등록</button>
+    `;
+  }
+  html += `</div>`;
+  contentEl.innerHTML = html;
+
+  if (!state.pickedStock){
+    const input = document.getElementById("stockSearch");
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    renderDropdown();
+    input.addEventListener("input", e=>{
+      state.searchQuery = e.target.value;
+      state.searchOpen = true;
+      renderDropdown();
+    });
+    input.addEventListener("focus", ()=>{ state.searchOpen = true; renderDropdown(); });
+  } else {
+    document.getElementById("clearStock").addEventListener("click", ()=>{
+      state.pickedStock = null; state.buyInput = ""; state.sellInput = ""; state.searchQuery = "";
+      renderAdd();
+    });
+    document.getElementById("buyInput").addEventListener("input", e=>{
+      state.buyInput = e.target.value;
+      document.getElementById("submitAlert").disabled = !state.buyInput && !state.sellInput;
+    });
+    document.getElementById("sellInput").addEventListener("input", e=>{
+      state.sellInput = e.target.value;
+      document.getElementById("submitAlert").disabled = !state.buyInput && !state.sellInput;
+    });
+    document.getElementById("submitAlert").addEventListener("click", ()=>{
+      const s = state.pickedStock;
+      state.watchlist.unshift({
+        id: Date.now()+"_"+s.ticker,
+        ticker: s.ticker,
+        name: s.name,
+        buyTarget: state.buyInput ? Number(state.buyInput) : null,
+        sellTarget: state.sellInput ? Number(state.sellInput) : null,
+        buyFired: false,
+        sellFired: false,
+        voiceURI: state.voiceURI,
+      });
+      saveWatch(state.watchlist);
+      maybeSyncPush();
+      state.pickedStock = null; state.buyInput = ""; state.sellInput = ""; state.searchQuery = "";
+      setTab("watch");
+    });
+  }
+}
+
+function renderDropdown(){
+  const host = document.getElementById("dropdownHost");
+  if (!host) return;
+  const q = state.searchQuery;
+  if (!state.searchOpen || !q.trim()){ host.innerHTML = ""; return; }
+  const results = STOCK_LIST.filter(s => matchesQuery(s.name, s.ticker, q)).slice(0, 30);
+  if (results.length === 0){ host.innerHTML = ""; return; }
+  host.innerHTML = `<div class="dropdown">${results.map(s=>`
+    <div class="drow" data-ticker="${esc(s.ticker)}">
+      <span class="nm">${esc(s.name)}</span>
+      <span class="tk mono">${esc(s.ticker)}</span>
+    </div>`).join("")}</div>`;
+  host.querySelectorAll(".drow").forEach(row=>{
+    row.addEventListener("mousedown", e=>{
+      e.preventDefault();
+      const tk = row.getAttribute("data-ticker");
+      const s = STOCK_LIST.find(x=>x.ticker===tk);
+      state.pickedStock = s; state.searchOpen = false; state.searchQuery = "";
+      renderAdd();
+    });
+  });
+}
+
+/* ================= 렌더: 감시 목록 탭 ================= */
+function pushCardHTML(){
+  const supported = ("serviceWorker" in navigator) && ("PushManager" in window);
+  if (!supported){
+    return `<div class="status-banner">이 브라우저는 백그라운드 알림(푸시)을 지원하지 않습니다. 앱을 화면에 띄워둔 상태에서만 음성 알림을 받을 수 있습니다.</div>`;
+  }
+  if (state.pushSubscribed){
+    return `
+      <div class="card">
+        <h2>백그라운드 알림</h2>
+        <div class="status-banner" style="margin-bottom:10px;">앱을 닫아도 목표가 도달 시 알림이 옵니다. (음성이 아닌 텍스트 알림이며, 알림을 탭하면 앱이 열리며 음성으로 다시 읽어드립니다)</div>
+        <button class="btn btn-ghost" id="pushToggleBtn" ${state.pushBusy?"disabled":""}>${state.pushBusy?"처리 중…":"백그라운드 알림 끄기"}</button>
+      </div>`;
+  }
+  return `
+    <div class="card">
+      <h2>백그라운드 알림</h2>
+      <div class="status-banner" style="margin-bottom:10px;">앱을 닫아도 목표가 도달을 놓치지 않으려면 백그라운드 알림을 켜세요. (텍스트 알림 + 진동, 탭하면 음성으로 다시 읽어드립니다)</div>
+      <button class="btn" id="pushToggleBtn" ${state.pushBusy?"disabled":""}>${state.pushBusy?"처리 중…":"백그라운드 알림 켜기"}</button>
+    </div>`;
+}
+
+function renderWatch(){
+  const pushHTML = pushCardHTML();
+  if (state.watchlist.length === 0){
+    contentEl.innerHTML = pushHTML + `<div class="empty">등록된 알림이 없습니다.<br/>'알림 등록' 탭에서 종목과 목표가를 설정해 보세요.</div>`;
+    bindPushToggle();
+    return;
+  }
+  contentEl.innerHTML = pushHTML + state.watchlist.map(item=>{
+    ensurePriceData(item.ticker);
+    const cache = state.priceCache[item.ticker];
+    const fired = item.buyFired || item.sellFired;
+    const priceHTML = (!cache || cache.loading)
+      ? `<div class="wi-price mono" style="font-size:16px;color:var(--dim);">조회중…</div>`
+      : cache.error
+        ? `<div class="wi-price mono" style="font-size:14px;color:var(--up);">조회 실패</div>`
+        : `<div class="wi-price mono">${fmt(cache.price)}</div>`;
+    const trendsHTML = (!cache || cache.loading || cache.error) ? "" : `
+      <div class="trend-grid" style="margin-top:10px;">
+        ${trendCellHTML("일간", cache.trends.day)}
+        ${trendCellHTML("주간", cache.trends.week)}
+        ${trendCellHTML("월간", cache.trends.month)}
+        ${trendCellHTML("년간", cache.trends.year)}
+      </div>`;
+    return `
+    <div class="watch-item ${fired?"fired":""}" data-id="${item.id}">
+      ${fired?`<div class="fired-badge">알림 발생</div>`:""}
+      <div class="wi-top">
+        <div><div class="wi-name">${esc(item.name)}</div><div class="wi-tk mono">${esc(item.ticker)}</div></div>
+        ${priceHTML}
+      </div>
+      ${trendsHTML}
+      <div class="wi-targets">
+        ${item.buyTarget?`<span class="t">매수 <b class="mono">${fmt(item.buyTarget)}</b>${item.buyFired?" ✓":""}</span>`:""}
+        ${item.sellTarget?`<span class="t">매도 <b class="mono">${fmt(item.sellTarget)}</b>${item.sellFired?" ✓":""}</span>`:""}
+      </div>
+      <div class="wi-actions">
+        ${fired?`<span class="pill reset" data-action="reset" data-id="${item.id}">다시 감시</span>`:""}
+        <span class="pill danger" data-action="remove" data-id="${item.id}">삭제</span>
+      </div>
+    </div>`;
+  }).join("");
+
+  contentEl.querySelectorAll("[data-action='remove']").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      state.watchlist = state.watchlist.filter(i=>i.id!==el.getAttribute("data-id"));
+      saveWatch(state.watchlist);
+      maybeSyncPush();
+      renderWatch();
+      updateTabLabels();
+    });
+  });
+  contentEl.querySelectorAll("[data-action='reset']").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      const id = el.getAttribute("data-id");
+      state.watchlist = state.watchlist.map(i => i.id===id ? {...i, buyFired:false, sellFired:false} : i);
+      saveWatch(state.watchlist);
+      maybeSyncPush();
+      renderWatch();
+    });
+  });
+  bindPushToggle();
+}
+
+function bindPushToggle(){
+  const btn = document.getElementById("pushToggleBtn");
+  if (!btn) return;
+  btn.addEventListener("click", async ()=>{
+    if (state.pushBusy) return;
+    state.pushBusy = true;
+    renderWatch();
+    try{
+      if (state.pushSubscribed) await unsubscribePush();
+      else await subscribePush();
+    } catch(err){
+      console.error(err);
+      alert("백그라운드 알림 설정 중 문제가 발생했습니다: " + err.message);
+    } finally {
+      state.pushBusy = false;
+      renderWatch();
+    }
+  });
+}
+
+/* ================= 백그라운드 푸시 구독 ================= */
+async function fetchVapidPublicKey(){
+  const res = await fetch(PUSH_SERVER + "/api/vapid-public-key");
+  if (!res.ok) throw new Error("서버에서 푸시 공개키를 가져오지 못했습니다. (서버 배포/주소를 확인해주세요)");
+  const data = await res.json();
+  if (!data.publicKey) throw new Error("서버 응답에 공개키가 없습니다.");
+  return data.publicKey;
+}
+
+async function subscribePush(){
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)){
+    throw new Error("이 브라우저는 푸시를 지원하지 않습니다.");
+  }
+  const reg = await navigator.serviceWorker.ready;
+  let permission = Notification.permission;
+  if (permission === "default") permission = await Notification.requestPermission();
+  if (permission !== "granted") throw new Error("알림 권한이 허용되지 않았습니다.");
+
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub){
+    const publicKey = await fetchVapidPublicKey();
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+  }
+
+  const res = await fetch(PUSH_SERVER + "/api/subscribe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ subscription: sub.toJSON() }),
+  });
+  if (!res.ok) throw new Error("서버 등록에 실패했습니다.");
+  const data = await res.json();
+
+  state.pushId = data.id;
+  state.pushSubscribed = true;
+  localStorage.setItem(LS_PUSH_ID, data.id);
+
+  await syncAlertsToServer();
+}
+
+async function unsubscribePush(){
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) await sub.unsubscribe();
+  } catch(e){ /* ignore */ }
+
+  if (state.pushId){
+    try{
+      await fetch(PUSH_SERVER + "/api/unsubscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: state.pushId }),
+      });
+    } catch(e){ /* ignore network errors on unsubscribe */ }
+  }
+
+  state.pushSubscribed = false;
+  state.pushId = null;
+  localStorage.removeItem(LS_PUSH_ID);
+}
+
+async function syncAlertsToServer(){
+  if (!state.pushSubscribed || !state.pushId) return;
+  try{
+    await fetch(PUSH_SERVER + "/api/alerts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: state.pushId, alerts: state.watchlist }),
+    });
+  } catch(e){
+    console.error("알림 목록 서버 동기화 실패", e);
+  }
+}
+
+function maybeSyncPush(){
+  if (state.pushSubscribed) syncAlertsToServer();
+}
+
+/* ================= 렌더: 음성 설정 탭 ================= */
+function renderVoice(){
+  const groups = { female: [], male: [], unknown: [] };
+  state.voices.forEach(v => groups[guessGender(v)].push(v));
+
+  function rowHTML(v, idx){
+    const g = guessGender(v);
+    const label = g==="female" ? "여성" : g==="male" ? "남성" : "확인필요";
+    const sel = v.voiceURI === state.voiceURI;
+    return `
+      <div class="voice-item ${sel?"sel":""}" data-uri="${esc(v.voiceURI)}">
+        <div class="vi-left">
+          <div class="radio-dot ${sel?"on":""}"></div>
+          <span class="gtag ${g}">${label}</span>
+          <div><div class="vname">${esc(v.name)}</div><div class="vlang mono">${esc(v.lang)}</div></div>
+        </div>
+        <div class="play-btn" data-preview="${esc(v.voiceURI)}">▶</div>
+      </div>`;
+  }
+
+  let html = `
+    <div class="status-banner">
+      기기·브라우저에 설치된 음성 목록입니다. ▶ 버튼으로 미리 들어본 뒤 사용할 목소리를 선택하세요.
+      한국어 음성이 목록에 없다면 기기 설정 &gt; 손쉬운 사용(또는 접근성) &gt; 음성에서
+      한국어 음성 데이터를 추가로 설치해야 합니다.
+    </div>`;
+
+  if (state.voices.length === 0){
+    html += `<div class="empty">사용 가능한 음성을 불러오는 중입니다…</div>`;
+  }
+  if (groups.female.length){ html += `<h2 style="margin:14px 0 10px;font-size:18px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase;font-weight:700;">여성 목소리</h2>` + groups.female.map(rowHTML).join(""); }
+  if (groups.male.length){ html += `<h2 style="margin:14px 0 10px;font-size:18px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase;font-weight:700;">남성 목소리</h2>` + groups.male.map(rowHTML).join(""); }
+  if (groups.unknown.length){ html += `<h2 style="margin:14px 0 10px;font-size:18px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase;font-weight:700;">기타 / 성별 미상</h2>` + groups.unknown.map(rowHTML).join(""); }
+
+  html += `
+    <div class="card" style="margin-top:14px;">
+      <h2>말하기 속도</h2>
+      <input type="range" min="0.6" max="1.4" step="0.05" value="${state.speechRate}" id="rateSlider" style="width:100%;" />
+      <div style="text-align:center;font-size:18px;color:var(--dim);margin-top:4px;" class="mono" id="rateLabel">${state.speechRate.toFixed(2)}x</div>
+    </div>`;
+
+  contentEl.innerHTML = html;
+
+  contentEl.querySelectorAll(".voice-item").forEach(el=>{
+    el.addEventListener("click", (e)=>{
+      if (e.target.closest(".play-btn")) return;
+      state.voiceURI = el.getAttribute("data-uri");
+      localStorage.setItem(LS_VOICE, state.voiceURI);
+      renderVoice();
+    });
+  });
+  contentEl.querySelectorAll(".play-btn").forEach(el=>{
+    el.addEventListener("click", (e)=>{
+      e.stopPropagation();
+      const uri = el.getAttribute("data-preview");
+      const v = state.voices.find(v=>v.voiceURI===uri);
+      previewVoice(v);
+    });
+  });
+  const slider = document.getElementById("rateSlider");
+  slider.addEventListener("input", e=>{
+    state.speechRate = Number(e.target.value);
+    document.getElementById("rateLabel").textContent = state.speechRate.toFixed(2)+"x";
+  });
+}
+
+function previewVoice(v){
+  if (!window.speechSynthesis || !v) return;
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance("삼성전자, 매수 목표가 팔만 원에 도달했습니다.");
+  u.voice = v; u.lang = v.lang || "ko-KR"; u.rate = state.speechRate;
+  window.speechSynthesis.speak(u);
+}
+
+function speak(text, uri){
+  if (!window.speechSynthesis) return;
+  const u = new SpeechSynthesisUtterance(text);
+  const v = state.voices.find(v=>v.voiceURI===uri) || state.voices.find(v=>v.voiceURI===state.voiceURI);
+  if (v){ u.voice = v; u.lang = v.lang; } else { u.lang = "ko-KR"; }
+  u.rate = state.speechRate;
+  window.speechSynthesis.speak(u);
+}
+
+function showToast(msg){
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = "🔊 " + msg;
+  toastWrap.innerHTML = "";
+  toastWrap.appendChild(el);
+  setTimeout(()=>{ el.remove(); }, 4000);
+}
+
+/* ================= 탭 전환 ================= */
+function setTab(tab){
+  state.tab = tab;
+  document.querySelectorAll(".tab").forEach(t=>{
+    t.classList.toggle("active", t.getAttribute("data-tab")===tab);
+  });
+  render();
+}
+function updateTabLabels(){
+  const watchTab = document.querySelector('.tab[data-tab="watch"]');
+  watchTab.textContent = state.watchlist.length>0 ? `감시 목록 (${state.watchlist.length})` : "감시 목록";
+}
+function render(){
+  if (state.tab==="add") renderAdd();
+  else if (state.tab==="watch") renderWatch();
+  else if (state.tab==="voice") renderVoice();
+  updateTabLabels();
+}
+
+document.querySelectorAll(".tab").forEach(t=>{
+  t.addEventListener("click", ()=> setTab(t.getAttribute("data-tab")));
+});
+
+/* ================= 음성 목록 로드 ================= */
+function loadVoices(){
+  const list = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+  const ko = list.filter(v => v.lang && v.lang.toLowerCase().startsWith("ko"));
+  state.voices = ko.length ? ko : list;
+  if (state.tab==="voice") renderVoice();
+}
+if (window.speechSynthesis){
+  loadVoices();
+  window.speechSynthesis.onvoiceschanged = loadVoices;
+}
+
+/* ================= 실시간 시세 폴링 =================
+   KIS API 호출 빈도를 고려해 15초 간격으로 감시 중인 종목들의 시세를 갱신합니다.
+   목표가 도달 체크는 ensurePriceData 내부(checkTargetsForTicker)에서 처리됩니다. */
+setInterval(()=>{
+  if (state.watchlist.length === 0) return;
+  const tickers = [...new Set(state.watchlist.map(i=>i.ticker))];
+  tickers.forEach(t => ensurePriceData(t, true));
+}, 15000);
+
+/* ================= 초기 렌더 ================= */
+render();
+
+if ("serviceWorker" in navigator){
+  navigator.serviceWorker.register("sw.js").catch(err=>console.error("서비스워커 등록 실패", err));
+}
+if (state.pushSubscribed) syncAlertsToServer();
+</script>
+</body>
+</html>
