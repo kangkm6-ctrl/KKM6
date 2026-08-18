@@ -228,9 +228,10 @@ async function ensurePriceData(ticker, forceRefresh){
 
   state.priceCache[ticker] = { ...(state.priceCache[ticker]||{}), loading: true };
   try{
-    const priceData = await fetchPrice(ticker);
-    let candles = [];
-    try { candles = await fetchHistory(ticker); } catch(e){ /* 추세 계산 불가 시 일간만 표시 */ }
+    const [priceData, candles] = await Promise.all([
+      fetchPrice(ticker),
+      fetchHistory(ticker).catch(()=>[]), // 추세 계산 불가 시 일간만 표시
+    ]);
     const trends = computeTrends(candles, priceData.price, priceData.prevClose);
     state.priceCache[ticker] = {
       price: priceData.price,
@@ -294,6 +295,30 @@ function toPctSeries(candles){
   return candles.map(c => ((Number(c.close) - first) / first) * 100);
 }
 
+/* 코스피/코스닥은 종목과 무관하게 기간별로 값이 동일하므로, 종목이 바뀌어도
+   다시 받아오지 않도록 별도 캐시(+ 진행 중인 요청 재사용)로 관리합니다. */
+const indexHistoryPromises = {};
+async function ensureIndexHistory(code, period, days){
+  const cacheKey = code + "_" + period;
+  const cached = state.indexCache[cacheKey];
+  if (cached && cached.fetchedAt) return cached;
+  if (indexHistoryPromises[cacheKey]) return indexHistoryPromises[cacheKey];
+
+  const p = (async () => {
+    state.indexCache[cacheKey] = { loading: true };
+    try{
+      const candles = await fetchIndexHistory(code, period, days);
+      state.indexCache[cacheKey] = { loading: false, error: null, pct: toPctSeries(candles), fetchedAt: Date.now() };
+    } catch(err){
+      state.indexCache[cacheKey] = { loading: false, error: err.message, fetchedAt: Date.now() };
+    }
+    delete indexHistoryPromises[cacheKey];
+    return state.indexCache[cacheKey];
+  })();
+  indexHistoryPromises[cacheKey] = p;
+  return p;
+}
+
 async function ensureChartData(ticker, period, days){
   const cacheKey = ticker + "_" + period;
   const cached = state.chartCache[cacheKey];
@@ -301,17 +326,17 @@ async function ensureChartData(ticker, period, days){
 
   state.chartCache[cacheKey] = { loading: true };
   try{
-    const [stockCandles, kospiCandles, kosdaqCandles] = await Promise.all([
+    const [stockCandles, kospiEntry, kosdaqEntry] = await Promise.all([
       fetchHistory(ticker, period, days),
-      fetchIndexHistory("0001", period, days),
-      fetchIndexHistory("1001", period, days),
+      ensureIndexHistory("0001", period, days),
+      ensureIndexHistory("1001", period, days),
     ]);
     state.chartCache[cacheKey] = {
       loading: false,
       error: null,
       stock: toPctSeries(stockCandles),
-      kospi: toPctSeries(kospiCandles),
-      kosdaq: toPctSeries(kosdaqCandles),
+      kospi: kospiEntry.pct || [],
+      kosdaq: kosdaqEntry.pct || [],
       fetchedAt: Date.now(),
     };
   } catch(err){
@@ -355,9 +380,9 @@ function legendSwatch(color, width, dash){
   return `<svg width="18" height="10" style="vertical-align:middle;margin-right:4px;"><line x1="1" y1="5" x2="17" y2="5" stroke="${color}" stroke-width="${width}"${dashAttr} /></svg>`;
 }
 
-function chartLegendHTML(stockName){
+function chartLegendHTML(stockName, stockColor){
   return `<div style="display:flex;gap:14px;font-size:10.5px;color:var(--dim);margin-top:6px;flex-wrap:wrap;align-items:center;">
-    <span style="display:flex;align-items:center;">${legendSwatch("#ff4d4f",2.6)}${esc(stockName)}</span>
+    <span style="display:flex;align-items:center;">${legendSwatch(stockColor || "#ff4d4f",2.6)}${esc(stockName)}</span>
     <span style="display:flex;align-items:center;">${legendSwatch("#9aa5b1",1.5)}코스피</span>
     <span style="display:flex;align-items:center;">${legendSwatch("#9aa5b1",1.5,"5,3")}코스닥</span>
   </div>`;
@@ -365,7 +390,10 @@ function chartLegendHTML(stockName){
 
 function renderChartsSection(ticker, stockName){
   const period = CHART_PERIODS.find(p => p.key === state.chartPeriod) || CHART_PERIODS[0];
-  ensureChartData(ticker, period.key, period.days); // 캐시 있으면 재사용, 없으면 백그라운드 조회 시작
+  ensureChartData(ticker, period.key, period.days); // 캐시 있으면 재사용, 없으면 조회 시작
+  // 다른 기간 차트도 백그라운드에서 미리 불러와, 탭 전환 시 바로 표시되게 합니다.
+  CHART_PERIODS.forEach(p => { if (p.key !== period.key) ensureChartData(ticker, p.key, p.days); });
+
   const cache = state.chartCache[ticker + "_" + period.key];
   let html = `<div style="margin-top:14px;">
     <div style="font-size:12px;color:var(--dim);margin-bottom:4px;font-weight:600;">${period.label}</div>`;
@@ -374,12 +402,14 @@ function renderChartsSection(ticker, stockName){
   } else if (cache.error){
     html += `<div class="status-banner" style="color:var(--up);">차트 조회 실패: ${esc(cache.error)}</div>`;
   } else {
+    const stockUp = cache.stock && cache.stock.length ? cache.stock[cache.stock.length - 1] >= 0 : true;
+    const stockColor = stockUp ? "#ff4d4f" : "#3b82f6"; // 상승=빨강, 하락=파랑
     html += buildMiniChartSVG([
       { color: "#9aa5b1", width: 1.5, points: cache.kospi },
       { color: "#9aa5b1", width: 1.5, dash: "5,3", points: cache.kosdaq },
-      { color: "#ff4d4f", width: 2.6, points: cache.stock },
+      { color: stockColor, width: 2.6, points: cache.stock },
     ]);
-    html += chartLegendHTML(stockName);
+    html += chartLegendHTML(stockName, stockColor);
   }
   html += `</div>`;
   return html;
@@ -428,6 +458,7 @@ const state = {
   voiceURI: localStorage.getItem(LS_VOICE) || null,
   priceCache: {},
   chartCache: {},
+  indexCache: {},
   chartPeriod: "D",
   pickedStock: null,
   buyInput: "",
