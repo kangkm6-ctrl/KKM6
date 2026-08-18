@@ -56,6 +56,8 @@
   .up{color:var(--up);} .down{color:var(--down);}
   .trend-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px;}
   .trend-cell{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 4px;text-align:center;}
+  .trend-cell.clickable{cursor:pointer;-webkit-tap-highlight-color:transparent;}
+  .trend-cell.clickable.active{border-color:#ff4d4f;background:rgba(255,77,79,.08);}
   .trend-cell .lab{font-size:15px;color:var(--dim);margin-bottom:3px;letter-spacing:.04em;}
   .trend-cell .val{font-size:18.75px;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:2px;line-height:1.15;}
   .trend-cell .arrow-line{font-size:15px;}
@@ -337,45 +339,48 @@ function buildMiniChartSVG(seriesList){
     }).join(" ");
   }
   const zeroY = (PAD + (1 - (0-min)/range) * (H - PAD*2)).toFixed(1);
-  const lines = seriesList.map(s => s.points && s.points.length>1
-    ? `<path d="${toPath(s.points)}" fill="none" stroke="${s.color}" stroke-width="1.6" />`
-    : ""
-  ).join("");
+  const lines = seriesList.map(s => {
+    if (!s.points || s.points.length < 2) return "";
+    const dashAttr = s.dash ? ` stroke-dasharray="${s.dash}"` : "";
+    return `<path d="${toPath(s.points)}" fill="none" stroke="${s.color}" stroke-width="${s.width||1.6}"${dashAttr} stroke-linecap="round" stroke-linejoin="round" />`;
+  }).join("");
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:70px;display:block;">
     <line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}" stroke="#232b35" stroke-width="1" stroke-dasharray="3,3" />
     ${lines}
   </svg>`;
 }
 
+function legendSwatch(color, width, dash){
+  const dashAttr = dash ? ` stroke-dasharray="${dash}"` : "";
+  return `<svg width="18" height="10" style="vertical-align:middle;margin-right:4px;"><line x1="1" y1="5" x2="17" y2="5" stroke="${color}" stroke-width="${width}"${dashAttr} /></svg>`;
+}
+
 function chartLegendHTML(stockName){
-  return `<div style="display:flex;gap:12px;font-size:10.5px;color:var(--dim);margin-top:4px;flex-wrap:wrap;">
-    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#20e3b2;margin-right:4px;"></span>${esc(stockName)}</span>
-    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f5b942;margin-right:4px;"></span>코스피</span>
-    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#7fb0ff;margin-right:4px;"></span>코스닥</span>
+  return `<div style="display:flex;gap:14px;font-size:10.5px;color:var(--dim);margin-top:6px;flex-wrap:wrap;align-items:center;">
+    <span style="display:flex;align-items:center;">${legendSwatch("#ff4d4f",2.6)}${esc(stockName)}</span>
+    <span style="display:flex;align-items:center;">${legendSwatch("#9aa5b1",1.5)}코스피</span>
+    <span style="display:flex;align-items:center;">${legendSwatch("#9aa5b1",1.5,"5,3")}코스닥</span>
   </div>`;
 }
 
 function renderChartsSection(ticker, stockName){
-  let html = `<div style="margin-top:14px;">`;
-  CHART_PERIODS.forEach(p => {
-    ensureChartData(ticker, p.key, p.days); // 캐시 있으면 재사용, 없으면 백그라운드 조회 시작
-    const cache = state.chartCache[ticker + "_" + p.key];
-    html += `<div style="margin-top:12px;">
-      <div style="font-size:12px;color:var(--dim);margin-bottom:4px;font-weight:600;">${p.label}</div>`;
-    if (!cache || cache.loading){
-      html += `<div class="status-banner">차트 불러오는 중…</div>`;
-    } else if (cache.error){
-      html += `<div class="status-banner" style="color:var(--up);">차트 조회 실패: ${esc(cache.error)}</div>`;
-    } else {
-      html += buildMiniChartSVG([
-        { color: "#20e3b2", points: cache.stock },
-        { color: "#f5b942", points: cache.kospi },
-        { color: "#7fb0ff", points: cache.kosdaq },
-      ]);
-      html += chartLegendHTML(stockName);
-    }
-    html += `</div>`;
-  });
+  const period = CHART_PERIODS.find(p => p.key === state.chartPeriod) || CHART_PERIODS[0];
+  ensureChartData(ticker, period.key, period.days); // 캐시 있으면 재사용, 없으면 백그라운드 조회 시작
+  const cache = state.chartCache[ticker + "_" + period.key];
+  let html = `<div style="margin-top:14px;">
+    <div style="font-size:12px;color:var(--dim);margin-bottom:4px;font-weight:600;">${period.label}</div>`;
+  if (!cache || cache.loading){
+    html += `<div class="status-banner">차트 불러오는 중…</div>`;
+  } else if (cache.error){
+    html += `<div class="status-banner" style="color:var(--up);">차트 조회 실패: ${esc(cache.error)}</div>`;
+  } else {
+    html += buildMiniChartSVG([
+      { color: "#9aa5b1", width: 1.5, points: cache.kospi },
+      { color: "#9aa5b1", width: 1.5, dash: "5,3", points: cache.kosdaq },
+      { color: "#ff4d4f", width: 2.6, points: cache.stock },
+    ]);
+    html += chartLegendHTML(stockName);
+  }
   html += `</div>`;
   return html;
 }
@@ -423,6 +428,7 @@ const state = {
   voiceURI: localStorage.getItem(LS_VOICE) || null,
   priceCache: {},
   chartCache: {},
+  chartPeriod: "D",
   pickedStock: null,
   buyInput: "",
   sellInput: "",
@@ -442,9 +448,11 @@ function esc(s){
 }
 function fmt(n){ return Number(n).toLocaleString("ko-KR"); }
 
-function trendCellHTML(label, value){
+function trendCellHTML(label, value, periodKey){
   const isUp = value >= 0;
-  return `<div class="trend-cell">
+  const cls = periodKey ? `trend-cell clickable${state.chartPeriod===periodKey?" active":""}` : "trend-cell";
+  const attr = periodKey ? ` data-period="${periodKey}"` : "";
+  return `<div class="${cls}"${attr}>
     <div class="lab">${label}</div>
     <div class="val mono ${isUp?"up":"down"}">
       <div class="arrow-line">${isUp?"▲":"▼"}</div>
@@ -482,10 +490,10 @@ function renderAdd(){
         <span class="chg mono ${cache.trends.day>=0?"up":"down"}">${cache.trends.day>=0?"▲":"▼"} ${Math.abs(cache.trends.day).toFixed(1)}%</span>
       </div>
       <div class="trend-grid">
-        ${trendCellHTML("일간", cache.trends.day)}
-        ${trendCellHTML("주간", cache.trends.week)}
-        ${trendCellHTML("월간", cache.trends.month)}
-        ${trendCellHTML("년간", cache.trends.year)}
+        ${trendCellHTML("일간", cache.trends.day, "D")}
+        ${trendCellHTML("주간", cache.trends.week, "W")}
+        ${trendCellHTML("월간", cache.trends.month, "M")}
+        ${trendCellHTML("년간", cache.trends.year, "Y")}
       </div>
       ${renderChartsSection(s.ticker, s.name)}`;
     }
@@ -518,6 +526,12 @@ function renderAdd(){
     });
     input.addEventListener("focus", ()=>{ state.searchOpen = true; renderDropdown(); });
   } else {
+    document.querySelectorAll(".trend-cell.clickable").forEach(cell=>{
+      cell.addEventListener("click", ()=>{
+        state.chartPeriod = cell.getAttribute("data-period");
+        renderAdd();
+      });
+    });
     document.getElementById("clearStock").addEventListener("click", ()=>{
       state.pickedStock = null; state.buyInput = ""; state.sellInput = ""; state.searchQuery = "";
       renderAdd();
@@ -567,7 +581,7 @@ function renderDropdown(){
       e.preventDefault();
       const tk = row.getAttribute("data-ticker");
       const s = STOCK_LIST.find(x=>x.ticker===tk);
-      state.pickedStock = s; state.searchOpen = false; state.searchQuery = "";
+      state.pickedStock = s; state.searchOpen = false; state.searchQuery = ""; state.chartPeriod = "D";
       renderAdd();
     });
   });
