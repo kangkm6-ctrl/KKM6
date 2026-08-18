@@ -414,6 +414,127 @@ function renderChartsSection(ticker, stockName){
   html += `</div>`;
   return html;
 }
+
+/* ================= EPS성장률 vs 주가 비교 차트 =================
+   /stock-fundamentals에서 분기(또는 연간) EPS를 받아 전기 대비 증가율(%)을 계산하고,
+   같은 시점의 주가를 함께 정규화(기간 시작 대비 %)해서 겹쳐 보여줍니다. */
+async function fetchFundamentals(ticker){
+  const res = await fetch(KIS_SERVER + "/stock-fundamentals/" + ticker);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "재무비율 조회 실패");
+  return data; // { code, divUsed, periods:[{period, eps, ...}], latest }
+}
+
+function periodToDateStr(period){
+  if (!period || period.length < 6) return null;
+  const y = period.slice(0,4);
+  const m = period.slice(4,6);
+  const daysInMonth = new Date(Number(y), Number(m), 0).getDate();
+  return `${y}${m}${String(daysInMonth).padStart(2,"0")}`;
+}
+
+function closestCloseAtDate(candles, targetDateStr){
+  if (!candles || candles.length === 0 || !targetDateStr) return null;
+  let best = null;
+  for (const c of candles){
+    if (c.date <= targetDateStr) best = c; else break;
+  }
+  if (!best) best = candles[0];
+  return Number(best.close);
+}
+
+/* EPS 시점 매칭을 위해 넉넉한 기간(최대 10년치)의 일봉을 한 번만 받아 재사용합니다. */
+const longHistoryPromises = {};
+async function ensureLongDailyHistory(ticker){
+  const cacheKey = ticker + "_longD";
+  const cached = state.rawHistoryCache[cacheKey];
+  if (cached && cached.fetchedAt) return cached;
+  if (longHistoryPromises[cacheKey]) return longHistoryPromises[cacheKey];
+
+  const p = (async () => {
+    state.rawHistoryCache[cacheKey] = { loading: true };
+    try{
+      const candles = await fetchHistory(ticker, "D", 4000);
+      state.rawHistoryCache[cacheKey] = { loading: false, error: null, candles, fetchedAt: Date.now() };
+    } catch(err){
+      state.rawHistoryCache[cacheKey] = { loading: false, error: err.message, fetchedAt: Date.now() };
+    }
+    delete longHistoryPromises[cacheKey];
+    return state.rawHistoryCache[cacheKey];
+  })();
+  longHistoryPromises[cacheKey] = p;
+  return p;
+}
+
+async function ensureEpsChartData(ticker){
+  const cached = state.epsChartCache[ticker];
+  if (cached && (cached.loading || cached.fetchedAt)) return cached;
+
+  state.epsChartCache[ticker] = { loading: true };
+  try{
+    const [fund, longHist] = await Promise.all([
+      fetchFundamentals(ticker),
+      ensureLongDailyHistory(ticker),
+    ]);
+    if (longHist.error) throw new Error(longHist.error);
+    const candles = longHist.candles || [];
+    const periods = (fund.periods || []).filter(p => p.eps != null);
+
+    const epsGrowth = [];
+    const priceAtPeriod = [];
+    for (let i = 1; i < periods.length; i++){
+      const prevEps = periods[i-1].eps;
+      const curEps = periods[i].eps;
+      if (!prevEps) continue; // 0으로 나누기 방지
+      const dateStr = periodToDateStr(periods[i].period);
+      const price = closestCloseAtDate(candles, dateStr);
+      if (price == null) continue;
+      epsGrowth.push(((curEps - prevEps) / Math.abs(prevEps)) * 100);
+      priceAtPeriod.push(price);
+    }
+    const base = priceAtPeriod.length ? priceAtPeriod[0] : null;
+    const priceChange = base ? priceAtPeriod.map(p => ((p - base) / base) * 100) : [];
+
+    state.epsChartCache[ticker] = {
+      loading: false,
+      error: null,
+      divUsed: fund.divUsed,
+      epsGrowth,
+      priceChange,
+      fetchedAt: Date.now(),
+    };
+  } catch(err){
+    state.epsChartCache[ticker] = { loading: false, error: err.message, fetchedAt: Date.now() };
+  }
+  if (state.tab === "add" && state.pickedStock && state.pickedStock.ticker === ticker) render();
+  return state.epsChartCache[ticker];
+}
+
+function renderEpsChartSection(ticker, stockName){
+  ensureEpsChartData(ticker);
+  const cache = state.epsChartCache[ticker];
+  let html = `<div style="margin-top:18px;">
+    <div style="font-size:12px;color:var(--dim);margin-bottom:4px;font-weight:600;">EPS성장률 vs 주가</div>`;
+  if (!cache || cache.loading){
+    html += `<div class="status-banner">EPS 데이터 불러오는 중…</div>`;
+  } else if (cache.error){
+    html += `<div class="status-banner" style="color:var(--up);">EPS 데이터 조회 실패: ${esc(cache.error)}</div>`;
+  } else if (!cache.epsGrowth || cache.epsGrowth.length < 2){
+    html += `<div class="status-banner">비교할 EPS 데이터가 부족합니다.</div>`;
+  } else {
+    html += buildMiniChartSVG([
+      { color: "#c9d4de", width: 1.8, points: cache.priceChange },
+      { color: "#f5c53d", width: 2.2, points: cache.epsGrowth },
+    ]);
+    html += `<div style="display:flex;gap:14px;font-size:10.5px;color:var(--dim);margin-top:6px;flex-wrap:wrap;align-items:center;">
+      <span style="display:flex;align-items:center;">${legendSwatch("#f5c53d",2.2)}EPS성장률</span>
+      <span style="display:flex;align-items:center;">${legendSwatch("#c9d4de",1.8)}${esc(stockName)} 주가</span>
+    </div>
+    <div style="font-size:10px;color:var(--dim);margin-top:4px;">${cache.divUsed==="quarter"?"분기별":"연간"} 비교 (최근 ${cache.epsGrowth.length}개 구간)</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
 const LS_VOICE = "svs_voice_v1";
 const LS_PUSH_ID = "svs_push_id_v1";
 
@@ -459,6 +580,8 @@ const state = {
   priceCache: {},
   chartCache: {},
   indexCache: {},
+  epsChartCache: {},
+  rawHistoryCache: {},
   chartPeriod: "D",
   pickedStock: null,
   buyInput: "",
@@ -526,7 +649,8 @@ function renderAdd(){
         ${trendCellHTML("월간", cache.trends.month, "M")}
         ${trendCellHTML("년간", cache.trends.year, "Y")}
       </div>
-      ${renderChartsSection(s.ticker, s.name)}`;
+      ${renderChartsSection(s.ticker, s.name)}
+      ${renderEpsChartSection(s.ticker, s.name)}`;
     }
     html += `
       <div class="target-grid">
