@@ -335,6 +335,7 @@ async function ensureChartData(ticker, period, days){
       loading: false,
       error: null,
       stock: toPctSeries(stockCandles),
+      stockRaw: stockCandles,
       kospi: kospiEntry.pct || [],
       kosdaq: kosdaqEntry.pct || [],
       fetchedAt: Date.now(),
@@ -382,10 +383,75 @@ function legendSwatch(color, width, dash){
 
 function chartLegendHTML(stockName, stockColor){
   return `<div style="display:flex;gap:14px;font-size:10.5px;color:var(--dim);margin-top:6px;flex-wrap:wrap;align-items:center;">
-    <span style="display:flex;align-items:center;">${legendSwatch(stockColor || "#ff4d4f",2.6)}${esc(stockName)}</span>
-    <span style="display:flex;align-items:center;">${legendSwatch("#9aa5b1",1.5)}코스피</span>
-    <span style="display:flex;align-items:center;">${legendSwatch("#9aa5b1",1.5,"5,3")}코스닥</span>
+    <span style="display:flex;align-items:center;">${legendSwatch(stockColor || "#ff4d4f",1.1)}${esc(stockName)}</span>
+    <span style="display:flex;align-items:center;">${legendSwatch("#9aa5b1",0.9)}코스피</span>
+    <span style="display:flex;align-items:center;">${legendSwatch("#9aa5b1",0.9,"5,3")}코스닥</span>
   </div>`;
+}
+
+function buildCandleSVG(candles){
+  if (!candles || candles.length < 2){
+    return `<div class="status-banner">봉차트 데이터가 부족합니다.</div>`;
+  }
+  const hasOHLC = candles.every(c => c.open != null && c.high != null && c.low != null && c.close != null);
+  if (!hasOHLC){
+    return `<div class="status-banner">봉차트를 표시하려면 서버에서 시가/고가/저가 데이터가 필요합니다.</div>`;
+  }
+  const W = 300, H = 110, PAD = 4;
+  const highs = candles.map(c => Number(c.high));
+  const lows = candles.map(c => Number(c.low));
+  const max = Math.max(...highs);
+  const min = Math.min(...lows);
+  const range = (max - min) || 1;
+  const n = candles.length;
+  const slot = (W - PAD*2) / n;
+  const bodyWidth = Math.max(1.2, slot * 0.6);
+
+  function y(v){ return PAD + (1 - (v - min) / range) * (H - PAD*2); }
+
+  const parts = candles.map((c, i) => {
+    const o = Number(c.open), h = Number(c.high), l = Number(c.low), cl = Number(c.close);
+    const isUp = cl >= o;
+    const color = isUp ? "#ff4d4f" : "#3b82f6"; // 상승=빨강, 하락=파랑
+    const x = PAD + i*slot + slot/2;
+    const yh = y(h), yl = y(l), yo = y(o), yc = y(cl);
+    const bodyTop = Math.min(yo, yc);
+    const bodyH = Math.max(1, Math.abs(yc - yo));
+    return `<line x1="${x.toFixed(1)}" y1="${yh.toFixed(1)}" x2="${x.toFixed(1)}" y2="${yl.toFixed(1)}" stroke="${color}" stroke-width="1" />` +
+      `<rect x="${(x - bodyWidth/2).toFixed(1)}" y="${bodyTop.toFixed(1)}" width="${bodyWidth.toFixed(1)}" height="${bodyH.toFixed(1)}" fill="${color}" />`;
+  }).join("");
+
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:90px;display:block;">${parts}</svg>`;
+}
+
+/* 선강후약(초반 강세→후반 약세)이면 약세, 선약후강(초반 약세→후반 강세)이면 강세로 판정합니다.
+   전반부/후반부 변화폭 차이가 클수록(강세·약세가 뚜렷할수록) %가 높아집니다. */
+function computeStrength(series){
+  if (!series || series.length < 4) return null;
+  const n = series.length;
+  const mid = Math.floor(n / 2);
+  const firstHalfChange = series[mid] - series[0];
+  const secondHalfChange = series[n-1] - series[mid];
+  const totalAbs = Math.abs(firstHalfChange) + Math.abs(secondHalfChange);
+  if (totalAbs === 0) return null;
+  const isLateStrong = secondHalfChange > firstHalfChange; // 선약후강 = 강세
+  const pct = (Math.abs(secondHalfChange - firstHalfChange) / totalAbs) * 100;
+  return { isLateStrong, pct };
+}
+
+function strengthIndicatorHTML(series){
+  const s = computeStrength(series);
+  if (!s) return "";
+  const color = s.isLateStrong ? "#ff4d4f" : "#3b82f6";
+  const label = s.isLateStrong ? "강세" : "약세";
+  let html = `<div style="display:flex;align-items:center;gap:6px;margin-top:8px;">
+    <span style="width:9px;height:9px;border-radius:50%;background:${color};display:inline-block;"></span>
+    <span style="font-size:11px;color:var(--dim);">${label}</span>
+  </div>`;
+  if (s.pct > 50){
+    html += `<div style="font-size:11px;color:${color};margin-top:2px;text-align:left;">${s.pct.toFixed(1)}%</div>`;
+  }
+  return html;
 }
 
 function renderChartsSection(ticker, stockName){
@@ -405,11 +471,13 @@ function renderChartsSection(ticker, stockName){
     const stockUp = cache.stock && cache.stock.length ? cache.stock[cache.stock.length - 1] >= 0 : true;
     const stockColor = stockUp ? "#ff4d4f" : "#3b82f6"; // 상승=빨강, 하락=파랑
     html += buildMiniChartSVG([
-      { color: "#9aa5b1", width: 1.5, points: cache.kospi },
-      { color: "#9aa5b1", width: 1.5, dash: "5,3", points: cache.kosdaq },
-      { color: stockColor, width: 2.6, points: cache.stock },
+      { color: "#9aa5b1", width: 0.9, points: cache.kospi },
+      { color: "#9aa5b1", width: 0.9, dash: "5,3", points: cache.kosdaq },
+      { color: stockColor, width: 1.1, points: cache.stock },
     ]);
     html += chartLegendHTML(stockName, stockColor);
+    html += `<div style="margin-top:10px;">${buildCandleSVG(cache.stockRaw)}</div>`;
+    html += strengthIndicatorHTML(cache.stock);
   }
   html += `</div>`;
   return html;
@@ -522,10 +590,10 @@ function renderAdd(){
         <span class="chg mono ${cache.trends.day>=0?"up":"down"}">${cache.trends.day>=0?"▲":"▼"} ${Math.abs(cache.trends.day).toFixed(1)}%</span>
       </div>
       <div class="trend-grid">
-        ${trendCellHTML("일간", cache.trends.day, "D")}
-        ${trendCellHTML("주간", cache.trends.week, "W")}
-        ${trendCellHTML("월간", cache.trends.month, "M")}
-        ${trendCellHTML("년간", cache.trends.year, "Y")}
+        ${trendCellHTML("일봉", cache.trends.day, "D")}
+        ${trendCellHTML("주봉", cache.trends.week, "W")}
+        ${trendCellHTML("월봉", cache.trends.month, "M")}
+        ${trendCellHTML("년봉", cache.trends.year, "Y")}
       </div>
       ${renderChartsSection(s.ticker, s.name)}`;
     }
@@ -659,10 +727,10 @@ function renderWatch(){
         : `<div class="wi-price mono">${fmt(cache.price)}</div>`;
     const trendsHTML = (!cache || cache.loading || cache.error) ? "" : `
       <div class="trend-grid" style="margin-top:10px;">
-        ${trendCellHTML("일간", cache.trends.day)}
-        ${trendCellHTML("주간", cache.trends.week)}
-        ${trendCellHTML("월간", cache.trends.month)}
-        ${trendCellHTML("년간", cache.trends.year)}
+        ${trendCellHTML("일봉", cache.trends.day)}
+        ${trendCellHTML("주봉", cache.trends.week)}
+        ${trendCellHTML("월봉", cache.trends.month)}
+        ${trendCellHTML("년봉", cache.trends.year)}
       </div>`;
     return `
     <div class="watch-item ${fired?"fired":""}" data-id="${item.id}">
