@@ -307,7 +307,7 @@ async function ensureIndexHistory(code, period, days){
     state.indexCache[cacheKey] = { loading: true };
     try{
       const candles = await fetchIndexHistory(code, period, days);
-      state.indexCache[cacheKey] = { loading: false, error: null, pct: toPctSeries(candles), fetchedAt: Date.now() };
+      state.indexCache[cacheKey] = { loading: false, error: null, candles, pct: toPctSeries(candles), fetchedAt: Date.now() };
     } catch(err){
       state.indexCache[cacheKey] = { loading: false, error: err.message, fetchedAt: Date.now() };
     }
@@ -316,6 +316,24 @@ async function ensureIndexHistory(code, period, days){
   })();
   indexHistoryPromises[cacheKey] = p;
   return p;
+}
+
+function alignSeriesByDate(stockCandles, sourceCandles){
+  if (!sourceCandles || sourceCandles.length === 0) return [];
+  return stockCandles.map(sc => {
+    let best = null;
+    for (const c of sourceCandles){
+      if (c.date <= sc.date) best = c; else break;
+    }
+    if (!best) best = sourceCandles[0];
+    return Number(best.close);
+  });
+}
+function toPctFromFirst(arr){
+  if (!arr || arr.length === 0) return [];
+  const first = arr[0];
+  if (!first) return [];
+  return arr.map(v => ((v - first) / first) * 100);
 }
 
 async function ensureChartData(ticker, period, days){
@@ -330,13 +348,15 @@ async function ensureChartData(ticker, period, days){
       ensureIndexHistory("0001", period, days),
       ensureIndexHistory("1001", period, days),
     ]);
+    const kospiAligned = toPctFromFirst(alignSeriesByDate(stockCandles, kospiEntry.candles));
+    const kosdaqAligned = toPctFromFirst(alignSeriesByDate(stockCandles, kosdaqEntry.candles));
     state.chartCache[cacheKey] = {
       loading: false,
       error: null,
       stock: toPctSeries(stockCandles),
       stockRaw: stockCandles,
-      kospi: kospiEntry.pct || [],
-      kosdaq: kosdaqEntry.pct || [],
+      kospi: kospiAligned,
+      kosdaq: kosdaqAligned,
       fetchedAt: Date.now(),
     };
   } catch(err){
@@ -344,35 +364,6 @@ async function ensureChartData(ticker, period, days){
   }
   if (state.tab === "add" && state.pickedStock && state.pickedStock.ticker === ticker) render();
   return state.chartCache[cacheKey];
-}
-
-function buildMiniChartSVG(seriesList){
-  const W = 300, H = 84, PAD = 4;
-  let allVals = [];
-  seriesList.forEach(s => { if (s.points && s.points.length) allVals = allVals.concat(s.points); });
-  if (allVals.length < 2) return `<div class="status-banner">차트 데이터가 부족합니다.</div>`;
-  const min = Math.min(...allVals);
-  const max = Math.max(...allVals);
-  const range = (max - min) || 1;
-  function toPath(points){
-    if (!points || points.length < 2) return "";
-    const n = points.length;
-    return points.map((v,i)=>{
-      const x = PAD + (i/(n-1)) * (W - PAD*2);
-      const y = PAD + (1 - (v-min)/range) * (H - PAD*2);
-      return `${i===0?"M":"L"}${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(" ");
-  }
-  const zeroY = (PAD + (1 - (0-min)/range) * (H - PAD*2)).toFixed(1);
-  const lines = seriesList.map(s => {
-    if (!s.points || s.points.length < 2) return "";
-    const dashAttr = s.dash ? ` stroke-dasharray="${s.dash}"` : "";
-    return `<path d="${toPath(s.points)}" fill="none" stroke="${s.color}" stroke-width="${s.width||1.6}"${dashAttr} stroke-linecap="round" stroke-linejoin="round" />`;
-  }).join("");
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:70px;display:block;">
-    <line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}" stroke="#232b35" stroke-width="1" stroke-dasharray="3,3" />
-    ${lines}
-  </svg>`;
 }
 
 function legendSwatch(color, width, dash){
@@ -388,39 +379,83 @@ function chartLegendHTML(stockName, stockColor){
   </div>`;
 }
 
-function buildCandleSVG(candles){
+function buildMergedChartSVG(candles, kospiPct, kosdaqPct, stockColor){
   if (!candles || candles.length < 2){
-    return `<div class="status-banner">봉차트 데이터가 부족합니다.</div>`;
+    return `<div class="status-banner">차트 데이터가 부족합니다.</div>`;
   }
   const hasOHLC = candles.every(c => c.open != null && c.high != null && c.low != null && c.close != null);
   if (!hasOHLC){
     return `<div class="status-banner">봉차트를 표시하려면 서버에서 시가/고가/저가 데이터가 필요합니다.</div>`;
   }
-  const W = 300, H = 110, PAD = 4;
+  const n = candles.length;
+  const firstClose = Number(candles[0].close);
+  const kospiLine = (kospiPct && kospiPct.length === n) ? kospiPct.map(p => firstClose * (1 + p/100)) : [];
+  const kosdaqLine = (kosdaqPct && kosdaqPct.length === n) ? kosdaqPct.map(p => firstClose * (1 + p/100)) : [];
+  const stockLine = candles.map(c => Number(c.close));
+
   const highs = candles.map(c => Number(c.high));
   const lows = candles.map(c => Number(c.low));
-  const max = Math.max(...highs);
-  const min = Math.min(...lows);
+  let allVals = highs.concat(lows);
+  if (kospiLine.length) allVals = allVals.concat(kospiLine);
+  if (kosdaqLine.length) allVals = allVals.concat(kosdaqLine);
+  const max = Math.max(...allVals);
+  const min = Math.min(...allVals);
   const range = (max - min) || 1;
-  const n = candles.length;
+
+  const W = 300, CH = 110, DOTROW = 16, PAD = 4;
+  const H = CH + DOTROW;
   const slot = (W - PAD*2) / n;
   const bodyWidth = Math.max(1.2, slot * 0.6);
 
-  function y(v){ return PAD + (1 - (v - min) / range) * (H - PAD*2); }
+  function y(v){ return PAD + (1 - (v - min) / range) * (CH - PAD*2); }
+  function x(i){ return PAD + i*slot + slot/2; }
 
-  const parts = candles.map((c, i) => {
+  const candleParts = candles.map((c, i) => {
     const o = Number(c.open), h = Number(c.high), l = Number(c.low), cl = Number(c.close);
     const isUp = cl >= o;
     const color = isUp ? "#ff4d4f" : "#3b82f6";
-    const x = PAD + i*slot + slot/2;
+    const xi = x(i);
     const yh = y(h), yl = y(l), yo = y(o), yc = y(cl);
     const bodyTop = Math.min(yo, yc);
     const bodyH = Math.max(1, Math.abs(yc - yo));
-    return `<line x1="${x.toFixed(1)}" y1="${yh.toFixed(1)}" x2="${x.toFixed(1)}" y2="${yl.toFixed(1)}" stroke="${color}" stroke-width="1" />` +
-      `<rect x="${(x - bodyWidth/2).toFixed(1)}" y="${bodyTop.toFixed(1)}" width="${bodyWidth.toFixed(1)}" height="${bodyH.toFixed(1)}" fill="${color}" />`;
+    return `<line x1="${xi.toFixed(1)}" y1="${yh.toFixed(1)}" x2="${xi.toFixed(1)}" y2="${yl.toFixed(1)}" stroke="${color}" stroke-width="1" />` +
+      `<rect x="${(xi - bodyWidth/2).toFixed(1)}" y="${bodyTop.toFixed(1)}" width="${bodyWidth.toFixed(1)}" height="${bodyH.toFixed(1)}" fill="${color}" />`;
   }).join("");
 
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:90px;display:block;">${parts}</svg>`;
+  function linePath(values){
+    if (!values || values.length < 2) return "";
+    return values.map((v,i)=>{
+      const xi = x(i), yi = y(v);
+      return `${i===0?"M":"L"}${xi.toFixed(1)},${yi.toFixed(1)}`;
+    }).join(" ");
+  }
+  const kospiPath = kospiLine.length ? `<path d="${linePath(kospiLine)}" fill="none" stroke="#9aa5b1" stroke-width="0.9" />` : "";
+  const kosdaqPath = kosdaqLine.length ? `<path d="${linePath(kosdaqLine)}" fill="none" stroke="#9aa5b1" stroke-width="0.9" stroke-dasharray="5,3" />` : "";
+  const stockPath = `<path d="${linePath(stockLine)}" fill="none" stroke="${stockColor || "#e7ecf1"}" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" />`;
+
+  const WINDOW = 6;
+  const dotY = CH + DOTROW/2;
+  const dotParts = candles.map((c, i) => {
+    if (i < WINDOW - 1) return "";
+    const slice = candles.slice(i - WINDOW + 1, i + 1).map(cc => Number(cc.close));
+    const mid = Math.floor(slice.length / 2);
+    const firstHalf = slice[mid] - slice[0];
+    const secondHalf = slice[slice.length-1] - slice[mid];
+    const totalAbs = Math.abs(firstHalf) + Math.abs(secondHalf);
+    if (totalAbs === 0) return "";
+    const isLateStrong = secondHalf > firstHalf;
+    const color = isLateStrong ? "#ff4d4f" : "#3b82f6";
+    const xi = x(i);
+    return `<circle cx="${xi.toFixed(1)}" cy="${dotY.toFixed(1)}" r="2.1" fill="${color}" />`;
+  }).join("");
+
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${Math.round(H*0.85)}px;display:block;">
+    ${kospiPath}
+    ${kosdaqPath}
+    ${candleParts}
+    ${stockPath}
+    ${dotParts}
+  </svg>`;
 }
 
 function computeStrength(series){
@@ -445,7 +480,7 @@ function strengthIndicatorHTML(series){
     <span style="width:9px;height:9px;border-radius:50%;background:${color};display:inline-block;"></span>
     <span style="font-size:11px;color:var(--dim);">${label}</span>
   </div>`;
-  if (s.pct > 50){
+  if (s.pct >= 50){
     html += `<div style="font-size:11px;color:${color};margin-top:2px;text-align:left;">${s.pct.toFixed(1)}%</div>`;
   }
   return html;
@@ -466,13 +501,8 @@ function renderChartsSection(ticker, stockName){
   } else {
     const stockUp = cache.stock && cache.stock.length ? cache.stock[cache.stock.length - 1] >= 0 : true;
     const stockColor = stockUp ? "#ff4d4f" : "#3b82f6";
-    html += buildMiniChartSVG([
-      { color: "#9aa5b1", width: 0.9, points: cache.kospi },
-      { color: "#9aa5b1", width: 0.9, dash: "5,3", points: cache.kosdaq },
-      { color: stockColor, width: 1.1, points: cache.stock },
-    ]);
+    html += buildMergedChartSVG(cache.stockRaw, cache.kospi, cache.kosdaq, stockColor);
     html += chartLegendHTML(stockName, stockColor);
-    html += `<div style="margin-top:10px;">${buildCandleSVG(cache.stockRaw)}</div>`;
     html += strengthIndicatorHTML(cache.stock);
   }
   html += `</div>`;
