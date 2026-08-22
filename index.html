@@ -442,18 +442,24 @@ function buildMergedChartSVG(candles, kospiPct, kosdaqPct, stockColor){
   const kosdaqPath = kosdaqLine.length ? `<path d="${linePath(kosdaqLine)}" fill="none" stroke="#9aa5b1" stroke-width="0.9" stroke-dasharray="5,3" />` : "";
   const stockPath = `<path d="${linePath(stockLine)}" fill="none" stroke="${stockColor || "#e7ecf1"}" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" />`;
 
-  // 각 봉 하단 강약 점: 그 봉을 포함한 최근 몇 개 구간의 전반부/후반부 변화폭 비교
+  // 각 봉 하단 강약 점: 그 봉을 포함한 최근 몇 개 구간의 전반부/후반부 변화폭 비교.
+  // 데이터가 모자란 초반 봉들도 빠짐없이 표시되도록, 구할 수 있는 만큼만으로 계산하고
+  // 그마저도 부족하면 그 봉 자체의 양봉/음봉 방향으로 대체합니다.
   const WINDOW = 6;
   const dotY = CH + DOTROW/2;
   const dotParts = candles.map((c, i) => {
-    if (i < WINDOW - 1) return "";
-    const slice = candles.slice(i - WINDOW + 1, i + 1).map(cc => Number(cc.close));
-    const mid = Math.floor(slice.length / 2);
-    const firstHalf = slice[mid] - slice[0];
-    const secondHalf = slice[slice.length-1] - slice[mid];
-    const totalAbs = Math.abs(firstHalf) + Math.abs(secondHalf);
-    if (totalAbs === 0) return "";
-    const isLateStrong = secondHalf > firstHalf; // 전약후강 = 강세
+    const start = Math.max(0, i - WINDOW + 1);
+    const slice = candles.slice(start, i + 1).map(cc => Number(cc.close));
+    let isLateStrong;
+    if (slice.length < 2){
+      isLateStrong = Number(c.close) >= Number(c.open);
+    } else {
+      const mid = Math.floor(slice.length / 2);
+      const firstHalf = slice[mid] - slice[0];
+      const secondHalf = slice[slice.length-1] - slice[mid];
+      const totalAbs = Math.abs(firstHalf) + Math.abs(secondHalf);
+      isLateStrong = totalAbs === 0 ? (Number(c.close) >= Number(c.open)) : (secondHalf > firstHalf);
+    }
     const color = isLateStrong ? "#ff4d4f" : "#3b82f6";
     const xi = x(i);
     return `<circle cx="${xi.toFixed(1)}" cy="${dotY.toFixed(1)}" r="2.1" fill="${color}" />`;
@@ -468,34 +474,41 @@ function buildMergedChartSVG(candles, kospiPct, kosdaqPct, stockColor){
   </svg>`;
 }
 
-/* 선강후약(초반 강세→후반 약세)이면 약세, 선약후강(초반 약세→후반 강세)이면 강세로 판정합니다.
-   전반부/후반부 변화폭 차이가 클수록(강세·약세가 뚜렷할수록) %가 높아집니다. */
-function computeStrength(series){
-  if (!series || series.length < 4) return null;
-  const n = series.length;
-  const mid = Math.floor(n / 2);
-  const firstHalfChange = series[mid] - series[0];
-  const secondHalfChange = series[n-1] - series[mid];
-  const totalAbs = Math.abs(firstHalfChange) + Math.abs(secondHalfChange);
-  if (totalAbs === 0) return null;
-  const isLateStrong = secondHalfChange > firstHalfChange; // 선약후강 = 강세
-  const pct = (Math.abs(secondHalfChange - firstHalfChange) / totalAbs) * 100;
-  return { isLateStrong, pct };
+/* buildMergedChartSVG의 봉 하단 점과 정확히 같은 기준으로 강세/약세 봉의 개수를 세어,
+   전체에서 차지하는 비율을 계산합니다. 50%를 넘는 쪽 하나만 표시합니다. */
+function computeDotSummary(candles){
+  if (!candles || candles.length === 0) return null;
+  const WINDOW = 6;
+  let bullCount = 0;
+  candles.forEach((c, i) => {
+    const start = Math.max(0, i - WINDOW + 1);
+    const slice = candles.slice(start, i + 1).map(cc => Number(cc.close));
+    let isLateStrong;
+    if (slice.length < 2){
+      isLateStrong = Number(c.close) >= Number(c.open);
+    } else {
+      const mid = Math.floor(slice.length / 2);
+      const firstHalf = slice[mid] - slice[0];
+      const secondHalf = slice[slice.length-1] - slice[mid];
+      const totalAbs = Math.abs(firstHalf) + Math.abs(secondHalf);
+      isLateStrong = totalAbs === 0 ? (Number(c.close) >= Number(c.open)) : (secondHalf > firstHalf);
+    }
+    if (isLateStrong) bullCount++;
+  });
+  const total = candles.length;
+  const bullPct = (bullCount / total) * 100;
+  const bearPct = 100 - bullPct;
+  if (bullPct >= 50) return { label: "강세", pct: bullPct, color: "#ff4d4f" };
+  return { label: "약세", pct: bearPct, color: "#3b82f6" };
 }
 
-function strengthIndicatorHTML(series){
-  const s = computeStrength(series);
+function strengthIndicatorHTML(candles){
+  const s = computeDotSummary(candles);
   if (!s) return "";
-  const color = s.isLateStrong ? "#ff4d4f" : "#3b82f6";
-  const label = s.isLateStrong ? "강세" : "약세";
-  let html = `<div style="display:flex;align-items:center;gap:6px;margin-top:8px;">
-    <span style="width:9px;height:9px;border-radius:50%;background:${color};display:inline-block;"></span>
-    <span style="font-size:11px;color:var(--dim);">${label}</span>
+  return `<div style="display:flex;align-items:center;gap:6px;margin-top:8px;">
+    <span style="width:9px;height:9px;border-radius:50%;background:${s.color};display:inline-block;"></span>
+    <span style="font-size:11px;color:${s.color};">${s.label} ${s.pct.toFixed(1)}%</span>
   </div>`;
-  if (s.pct >= 50){
-    html += `<div style="font-size:11px;color:${color};margin-top:2px;text-align:left;">${s.pct.toFixed(1)}%</div>`;
-  }
-  return html;
 }
 
 function renderChartsSection(ticker, stockName){
@@ -516,7 +529,7 @@ function renderChartsSection(ticker, stockName){
     const stockColor = stockUp ? "#ff4d4f" : "#3b82f6"; // 상승=빨강, 하락=파랑
     html += buildMergedChartSVG(cache.stockRaw, cache.kospi, cache.kosdaq, stockColor);
     html += chartLegendHTML(stockName, stockColor);
-    html += strengthIndicatorHTML(cache.stock);
+    html += strengthIndicatorHTML(cache.stockRaw);
   }
   html += `</div>`;
   return html;
